@@ -44,7 +44,7 @@ public class EasyStorer {
     private SQLiteDatabase getDatabase(String databaseName){
         SQLiteDatabase db;
         synchronized (locker){
-            if(dbProvider.get(databaseName) != null) return dbProvider.get(databaseName);
+            if(dbProvider.get(databaseName) != null&&dbProvider.get(databaseName).isOpen()) return dbProvider.get(databaseName);
             File f = new File(context.getDatabasePath(databaseName+".db").getAbsolutePath());
             if(!f.getParentFile().exists()){
                 f.getParentFile().mkdirs();
@@ -55,18 +55,7 @@ public class EasyStorer {
             if(!f.exists()){
                 try { f.createNewFile(); } catch (IOException e) { }
             }
-            db = SQLiteDatabase.openOrCreateDatabase(f,null);
-            //TODO
-            // E/SQLiteDatabase: Failed to open database '/data/user/0/priv.songxusheng.testeasystorer/databases/901.db'.
-            //      android.database.sqlite.SQLiteException: Failed to change locale for db '/data/user/0/priv.songxusheng.testeasystorer/databases/901.db' to 'zh_CN'.
-            //           at android.database.sqlite.SQLiteConnection.setLocaleFromConfiguration(SQLiteConnection.java:401)
-            //           at android.database.sqlite.SQLiteConnection.open(SQLiteConnection.java:226)
-
-            //When I use 1000 thread to process the data at the same time, I meet this exception
-            //For more information to see /priv/songxusheng/easystorer/ExampleUnitTest.java
-
-            //Use next line to get database object.
-            //SQLiteDatabase.openDatabase(f.getAbsolutePath(),null,SQLiteDatabase.NO_LOCALIZED_COLLATORS|SQLiteDatabase.CREATE_IF_NECESSARY);
+            db =  SQLiteDatabase.openDatabase(f.getAbsolutePath(),null,SQLiteDatabase.NO_LOCALIZED_COLLATORS|SQLiteDatabase.CREATE_IF_NECESSARY);
             db.execSQL("Create Table if not exists " +
                     "EasyStorer(" +
                     "Tag varchar(100)," +
@@ -88,33 +77,34 @@ public class EasyStorer {
     //region 增删查
     private String OBJECT_SAVE_PATH = context.getFilesDir().getAbsolutePath();
     private Object readObject(String tag,Object defaultValue,String databaseName){
-        SQLiteDatabase db = getDatabase(databaseName);
+        SQLiteDatabase db = null;
         Cursor cursor = null;
         FileInputStream fis = null;
         ObjectInputStream ois = null;
-        try {
-            //search the file save info
-            synchronized (locker){
+        synchronized (locker){
+            try {
+                //search the file save info
+                db = getDatabase(databaseName);
                 cursor = db.rawQuery("Select pFileName from EasyStorer where Tag = ? and ClassName = ?",new String[]{tag,defaultValue.getClass().getName()});
-            }
-            cursor.moveToNext();
-            fis = new FileInputStream(String.format("%s/%s/%s.es",OBJECT_SAVE_PATH,databaseName,String.valueOf(cursor.getLong(0))));
-            ois = new ObjectInputStream(fis);
-            return ois.readObject();
-        } catch (Exception e) {
-            Log.e("EasyStorer",e.getMessage());
-        } finally {
-            try { cursor.close(); } catch (Exception e) { }
-            try { ois.close(); } catch (Exception e) { }
-            try { fis.close(); } catch (Exception e) { }
-        }
+                cursor.moveToNext();
 
+                fis = new FileInputStream(String.format("%s/%s/%s.es",OBJECT_SAVE_PATH,databaseName,String.valueOf(cursor.getLong(0))));
+                ois = new ObjectInputStream(fis);
+                return ois.readObject();
+            } catch (Exception e) {
+                Log.e("EasyStorer",e.getMessage());
+            } finally {
+                try { cursor.close(); } catch (Exception e) { }
+                try { ois.close(); } catch (Exception e) { }
+                try { fis.close(); } catch (Exception e) { }
+            }
+        }
         return defaultValue;
     }
 
     private boolean writeObject(String tag, Object obj, String databaseName){
         //declare variables
-        SQLiteDatabase db = getDatabase(databaseName);
+        SQLiteDatabase db = null;
         Cursor cursor = null;
         FileOutputStream fos = null;
         ObjectOutputStream oos = null;
@@ -123,6 +113,7 @@ public class EasyStorer {
         long index = 1L;
 
         synchronized (locker){
+            db = getDatabase(databaseName);
             try {
                 db.beginTransaction();
                 //delete the old file
@@ -181,10 +172,11 @@ public class EasyStorer {
     }
 
     private boolean removeItem(String tag,String databaseName){
-        SQLiteDatabase db = getDatabase(databaseName);
+        SQLiteDatabase db = null;
         Cursor cursor = null;
         boolean flag = true;
         synchronized (locker){
+            db = getDatabase(databaseName);
             db.beginTransaction();
             try {
                 cursor = db.rawQuery("Select pFileName,ClassName from EasyStorer where Tag = ?",new String[]{tag});
@@ -201,16 +193,17 @@ public class EasyStorer {
                 try { cursor.close(); } catch (Exception e) { }
                 db.endTransaction();
             }
-//            System.gc();
+            System.gc();
         }
         return flag;
     }
 
     private boolean removeItem(String tag,Class clazz,String databaseName){
-        SQLiteDatabase db = getDatabase(databaseName);
+        SQLiteDatabase db = null;
         Cursor cursor = null;
         boolean flag = true;
         synchronized (locker){
+            db = getDatabase(databaseName);
             db.beginTransaction();
             try {
                 cursor = db.rawQuery("Select pFileName,ClassName from EasyStorer where Tag = ?",new String[]{tag,clazz.getName()});
@@ -227,16 +220,17 @@ public class EasyStorer {
                 try { cursor.close(); } catch (Exception e) { }
                 db.endTransaction();
             }
-//            System.gc();
+            System.gc();
         }
         return flag;
     }
 
     private boolean clearAll(String databaseName){
-        SQLiteDatabase db =  databaseName == null ?getDatabase():getDatabase(databaseName);
+        SQLiteDatabase db = null;
         boolean flag = true;
         synchronized (locker){
             try {
+                db = getDatabase(databaseName);
                 db.beginTransaction();
                 File file = new File(String.format("%s/%s/",OBJECT_SAVE_PATH,databaseName));
                 if(file.exists()&&file.isDirectory()){
@@ -256,7 +250,6 @@ public class EasyStorer {
                     db.setTransactionSuccessful();
                     db.endTransaction();
                     String path = context.getDatabasePath(databaseName).getParent();
-                    try { db.close(); } catch (Exception e) { }
                     try { new File(path+"/"+databaseName+"/").delete(); } catch (Exception e) { }
                     try { new File(path+"/"+databaseName+".db").delete(); } catch (Exception e) { }
                     try { new File(path+"/"+databaseName+".db-journal").delete(); } catch (Exception e) { }
@@ -265,7 +258,7 @@ public class EasyStorer {
                 else {
                     db.endTransaction();
                 }
-//                System.gc();
+                System.gc();
             }
         }
         return flag;
@@ -321,7 +314,7 @@ public class EasyStorer {
         }
         CheckSerializable(obj.getClass());
         classSet.clear();
-//        System.gc();
+        System.gc();
     }
     //endregion
 
