@@ -1,19 +1,20 @@
-# EasyStorer
 @[TOC](目录)
 还在使用Android SDK中的笨重的SharedPreferences嘛？
 或者不断重复造的SQLite数据库？
 不如试试这个EasyStorer?
 像使用Map<String,Object>一样存储数据对象到本地。
+
 https://blog.csdn.net/best335/article/details/104772571
-# EasyStorer的使用
+
+# [EasyStorer的使用](https://github.com/isong0623/EasyStorer.git)
 EasyStorer静态公有函数，怎么样，看了这个类结构，大概不用我说该怎么用了叭？
 ![在这里插入图片描述](https://img-blog.csdnimg.cn/20200310165055702.png?x-oss-process=image/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L2Jlc3QzMzU=,size_16,color_FFFFFF,t_70)
 修改app的build.gradle文件
 ```bash
 dependencies {
 	...
-	//1.0版本不要在多线程中操作同一个数据库，正在修复异常
-	api "com.github.isong0623:EasyStorer:1.0-support"
+	//https://github.com/isong0623/EasyStorer.git
+	api "com.github.isong0623:EasyStorer:2.0-core"
 	...
 }
 ```
@@ -127,7 +128,7 @@ E/TestEasyStorer: abc
 ```
 ### 疑问
 Q:为什么有两个put和两个get?
-A:我们所有的数据引用都是放在SQLite数据库中的，两个参数的函数指定了默认数据库（/data/data/com.example.package/databases/_Easy_Storer_.db_），与此同时，还有一个以该数据库命名的文件夹（/data/data/com.example.package/databases/_Easy_Storer_/）用于存放串行化的数据，以数字命名。我们可以对不同群体使用不同的数据库名称进行操作，例如我们使用“user_info”存储用户信息，用"app_info"存储应用信息等更方便地管理应用中的角色。
+A:我们可以对不同群体使用不同的数据库名称进行操作，例如我们使用“user_info”存储用户信息，用"app_info"存储应用信息等更方便地管理应用中的角色。
 
 ### API详解
 ###### 初始化
@@ -237,23 +238,15 @@ A:我们所有的数据引用都是放在SQLite数据库中的，两个参数的
 	
 # EasyStorer使用性能测试
 所有测试增删查执行上文所述“**正式使用**”
-## 同步测试（真机OPPO A57）
-使用若干个线程操作同一个数据库在，其测试结果如下：
+## 同步测试（真机Meizu m8）
+使用若干个线程操作同一个数据组，其测试结果如下：
 | 使用线程数 | 内存使用 | 异常情况 |
 |--|--|--|
-| 100 | ![在这里插入图片描述](https://img-blog.csdnimg.cn/20200312100653648.png?x-oss-process=image/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L2Jlc3QzMzU=,size_16,color_FFFFFF,t_70) | |
-| 200 | ![在这里插入图片描述](https://img-blog.csdnimg.cn/20200312100357311.png?x-oss-process=image/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L2Jlc3QzMzU=,size_16,color_FFFFFF,t_70) | |
-| 300 | ![在这里插入图片描述](https://img-blog.csdnimg.cn/20200312101128875.png?x-oss-process=image/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L2Jlc3QzMzU=,size_16,color_FFFFFF,t_70) | 无 |
-| 500 | ![在这里插入图片描述](https://img-blog.csdnimg.cn/20200312100044971.png?x-oss-process=image/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L2Jlc3QzMzU=,size_16,color_FFFFFF,t_70) | 无 |
-| 1000 | ![在这里插入图片描述](https://img-blog.csdnimg.cn/20200312102419457.png?x-oss-process=image/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L2Jlc3QzMzU=,size_16,color_FFFFFF,t_70) | 无 |
+| 1000 |![在这里插入图片描述](https://img-blog.csdnimg.cn/20200319164042467.png?x-oss-process=image/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L2Jlc3QzMzU=,size_16,color_FFFFFF,t_70)|无|
 
 
-## 异步测试（真机OPPO A57）
-通过对若干线程同时增删查，且每个线程操作单独的数据库，我们得到以下测试结果：
+## 异步测试（Meizu m8）
+通过对若干线程同时增删查，且每个线程操作单独的数据组，我们得到以下测试结果：
 | 使用线程数 | 内存使用 | 异常情况 |
 |--|--|--|
-| 100 | ![在这里插入图片描述](https://img-blog.csdnimg.cn/20200312111949872.png?x-oss-process=image/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L2Jlc3QzMzU=,size_16,color_FFFFFF,t_70)| 无 |
-| 200 | ![在这里插入图片描述](https://img-blog.csdnimg.cn/2020031211171811.png?x-oss-process=image/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L2Jlc3QzMzU=,size_16,color_FFFFFF,t_70) | 无 |
-| 300 |![在这里插入图片描述](https://img-blog.csdnimg.cn/20200312111152280.png?x-oss-process=image/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L2Jlc3QzMzU=,size_16,color_FFFFFF,t_70) | 无 |
-| 500 | ![在这里插入图片描述](https://img-blog.csdnimg.cn/20200312110234603.png?x-oss-process=image/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L2Jlc3QzMzU=,size_16,color_FFFFFF,t_70) | 无 |
-| 1000 | ![在这里插入图片描述](https://img-blog.csdnimg.cn/20200312104838272.png?x-oss-process=image/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L2Jlc3QzMzU=,size_16,color_FFFFFF,t_70)  | RuntimeException: unable to open database file |
+| 1000 | ![在这里插入图片描述](https://img-blog.csdnimg.cn/20200319163850770.png?x-oss-process=image/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L2Jlc3QzMzU=,size_16,color_FFFFFF,t_70)| 无 |
