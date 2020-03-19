@@ -1,14 +1,11 @@
 package priv.songxusheng.easystorer;
 
 import android.content.Context;
-import android.database.Cursor;
-import android.database.sqlite.SQLiteDatabase;
 import android.util.Log;
 
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
-import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.io.Serializable;
@@ -19,6 +16,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 public class EasyStorer {
     //region 单例
@@ -26,248 +24,291 @@ public class EasyStorer {
     private final static class InstanceHolder{
         private static EasyStorer instance = null;
         private synchronized static EasyStorer getInstance(){
-            if(instance==null)  try {instance = new EasyStorer(); } catch (Exception e) { }
+            if(instance==null) {
+                instance = new EasyStorer();
+                if(InstanceHolder.instance.lockHolder==null){
+                    InstanceHolder.instance.lockHolder = new HashMap<>();
+                }
+                if(OBJECT_SAVE_PATH==null){
+                    if(context == null)
+                        throw new RuntimeException("You can't use EasyStorer without initializing it!\nYou should call EasyStorer.init() first in Application!:");
+                    OBJECT_SAVE_PATH = context.getFilesDir().getAbsolutePath();
+                }
+                else{
+                    File f = new File(OBJECT_SAVE_PATH+"/");
+                    if(!f.exists()){
+                        if(!f.getParentFile().exists())
+                            f.getParentFile().mkdirs();
+                        if(!f.exists())
+                            throw new RuntimeException("You can't use EasyStorer path with an unreadable position!");
+                    }
+                    else if(!f.isDirectory())
+                        throw new RuntimeException("You can't use EasyStorer path with a file!");
+                }
+            }
             return instance;
         }
     }
     private static final EasyStorer getInstance() {
         return InstanceHolder.getInstance();
     }
-    //endregion
 
-    //region 获取数据库
-    private final Object locker = new Object();//数据库操作同步锁
-    private final Map<String,SQLiteDatabase> dbProvider= new HashMap();
-    private SQLiteDatabase getDatabase(){
-        return getDatabase("_Easy_Storer_");
-    }
-    private SQLiteDatabase getDatabase(String databaseName){
-        SQLiteDatabase db;
-        synchronized (locker){
-            if(dbProvider.get(databaseName) != null&&dbProvider.get(databaseName).isOpen()) return dbProvider.get(databaseName);
-            File f = new File(context.getDatabasePath(databaseName+".db").getAbsolutePath());
-            if(!f.getParentFile().exists()){
-                f.getParentFile().mkdirs();
+    protected static final void releaseInstance(){//for test
+        ReentrantReadWriteLock.WriteLock lock = holderLock.writeLock();
+        lock.lock();
+        try {
+            if( InstanceHolder.instance == null) {
+                System.gc();
+                return;
             }
-            if(f.exists()&&f.isDirectory()){
-                f.delete();
+            Set<Map.Entry<String, Map<String, Map<String,ReentrantReadWriteLock> > > > groups = InstanceHolder.instance.lockHolder.entrySet();
+            for(Map.Entry<String, Map<String, Map<String,ReentrantReadWriteLock> > > group:groups){
+                Set<Map.Entry<String, Map<String,ReentrantReadWriteLock> > > tags = group.getValue().entrySet();
+                for(Map.Entry<String, Map<String,ReentrantReadWriteLock> > tag:tags){
+                    Set<Map.Entry<String,ReentrantReadWriteLock> > clzs = tag.getValue().entrySet();
+                    for(Map.Entry<String,ReentrantReadWriteLock> clz:clzs){
+                        tag.getValue().remove(clz.getKey());
+                    }
+                    tag.getValue().clear();
+                    group.getValue().remove(tag.getKey());
+                }
+                group.getValue().clear();
+                InstanceHolder.instance.lockHolder.remove(group.getKey());
             }
-            if(!f.exists()){
-                try { f.createNewFile(); } catch (IOException e) { }
-            }
-            db =  SQLiteDatabase.openDatabase(f.getAbsolutePath(),null,SQLiteDatabase.NO_LOCALIZED_COLLATORS|SQLiteDatabase.CREATE_IF_NECESSARY);
-            db.execSQL("Create Table if not exists " +
-                    "EasyStorer(" +
-                    "Tag varchar(100)," +
-                    "ClassName varchar(100)," +
-                    "pFileName varchar(1000)," +
-                    "PRIMARY KEY(Tag,ClassName));");
-            db.execSQL("Create Table if not exists EasyIndex(ID bigint);");
-            Cursor cursor = db.rawQuery("Select Count(*) from EasyIndex;",null);
-            if(!cursor.moveToNext()){
-                db.execSQL("Insert into EasyIndex(ID) Values (0); ");
-            }
-            cursor.close();
-            dbProvider.put(databaseName,db);
-            return db;
+            InstanceHolder.instance.lockHolder.clear();
+            InstanceHolder.instance.lockHolder = null;
+            InstanceHolder.instance = null;
+            System.gc();
+        } finally {
+            lock.unlock();
         }
     }
+    //endregion
+
+    //region 锁
+    private volatile Map<String, Map<String, Map<String,ReentrantReadWriteLock> > > lockHolder = new HashMap<>();
+    private volatile static ReentrantReadWriteLock holderLock = new ReentrantReadWriteLock(true);
+    final private ReentrantReadWriteLock getLock(String group, String classPath, String tag){
+        ReentrantReadWriteLock.ReadLock lock = holderLock.readLock();//share&fair lock
+
+        lock.lock();
+        try {
+            Map<String, Map<String,ReentrantReadWriteLock> > mGroup = lockHolder.get(group);
+            Map<String,ReentrantReadWriteLock> mTag;
+            ReentrantReadWriteLock retLock;
+            if(mGroup == null){
+                synchronized (EasyStorer.class){
+                    mGroup = lockHolder.get(group);
+                    if(mGroup==null){
+                        mGroup = new HashMap<>();
+                        mTag = new HashMap<>();
+                        retLock = new ReentrantReadWriteLock(true);
+                        mTag.put(classPath,retLock);
+                        mGroup.put(tag,mTag);
+                        lockHolder.put(group,mGroup);
+                        return retLock;
+                    }
+                }
+            }
+            mTag = mGroup.get(tag);
+            if(mTag==null){
+                synchronized (mGroup){
+                    mTag = mGroup.get(tag);
+                    if(mTag == null){
+                        mTag = new HashMap<>();//unique one
+                        retLock = new ReentrantReadWriteLock(true);
+                        mTag.put(classPath,retLock);
+                        mGroup.put(tag,mTag);
+                        return retLock;
+                    }
+                }
+            }
+            retLock = mTag.get(classPath);
+            if(retLock==null){
+               synchronized (mTag){
+                   retLock = mTag.get(classPath);
+                   if(retLock==null){
+                       retLock = new ReentrantReadWriteLock(true);
+                       mTag.put(classPath,retLock);
+                   }
+               }
+            }
+            return retLock;
+        } finally {
+            lock.unlock();
+        }
+
+    }
+
+    private final void removeLock(String group, String classPath, String tag){
+        ReentrantReadWriteLock.WriteLock lock = holderLock.writeLock();
+        lock.lock();
+        try {
+            Map<String, Map<String,ReentrantReadWriteLock> > mGroup = lockHolder.get(group);
+            if(mGroup == null) {
+                lockHolder.remove(group);
+                return;
+            }
+            synchronized (mGroup){
+                Map<String,ReentrantReadWriteLock> mTag = mGroup.get(tag);
+                if(mTag == null) return;
+                synchronized (mTag){
+                    mTag.remove(classPath);
+                    if(mTag.size()==0){
+                        mGroup.remove(tag);
+                        if(mGroup.size()==0){
+                            lockHolder.remove(group);
+                        }
+                    }
+                }
+            }
+        } finally {
+            lock.unlock();
+        }
+    }
+
     //endregion
 
     //region 增删查
-    private String OBJECT_SAVE_PATH = context.getFilesDir().getAbsolutePath();
-    private Object readObject(String tag,Object defaultValue,String databaseName){
-        SQLiteDatabase db = null;
-        Cursor cursor = null;
+    private static String OBJECT_SAVE_PATH = null;
+    private Object readObject(String tag,Object defaultValue,String readGroup){
+        if(!new File(String.format("%s/%s/%s/%s.es",OBJECT_SAVE_PATH,readGroup,defaultValue.getClass().getName().replaceAll("\\.", "/"),tag)).exists()) {
+            removeLock(readGroup,defaultValue.getClass().getName(),tag);
+            return defaultValue;
+        }
         FileInputStream fis = null;
         ObjectInputStream ois = null;
-        synchronized (locker){
-            try {
-                //search the file save info
-                db = getDatabase(databaseName);
-                cursor = db.rawQuery("Select pFileName from EasyStorer where Tag = ? and ClassName = ?",new String[]{tag,defaultValue.getClass().getName()});
-                cursor.moveToNext();
+        final ReentrantReadWriteLock.ReadLock lock = getLock(readGroup,defaultValue.getClass().getName(),tag).readLock();
 
-                fis = new FileInputStream(String.format("%s/%s/%s.es",OBJECT_SAVE_PATH,databaseName,String.valueOf(cursor.getLong(0))));
-                ois = new ObjectInputStream(fis);
-                return ois.readObject();
-            } catch (Exception e) {
-                Log.e("EasyStorer",e.getMessage());
-            } finally {
-                try { cursor.close(); } catch (Exception e) { }
-                try { ois.close(); } catch (Exception e) { }
-                try { fis.close(); } catch (Exception e) { }
-            }
+        lock.lock();
+        try {
+            fis = new FileInputStream(String.format("%s/%s/%s/%s.es",OBJECT_SAVE_PATH,readGroup,defaultValue.getClass().getName().replaceAll("\\.", "/"),tag));
+            ois = new ObjectInputStream(fis);
+            return ois.readObject();
+        } catch (Exception e) {
+        } finally {
+            try { ois.close(); } catch (Exception e) { }
+            try { fis.close(); } catch (Exception e) { }
+            lock.unlock();
         }
+
         return defaultValue;
     }
 
-    private boolean writeObject(String tag, Object obj, String databaseName){
+    private boolean writeObject(String tag, Object obj, String group){
         //declare variables
-        SQLiteDatabase db = null;
-        Cursor cursor = null;
         FileOutputStream fos = null;
         ObjectOutputStream oos = null;
-        File wFile = null, pFiles[] = null;
+        final ReentrantReadWriteLock.WriteLock lock = getLock(group,obj.getClass().getName(),tag).writeLock();
+        File wFile = null;
         boolean flag = true;
-        long index = 1L;
 
-        synchronized (locker){
-            db = getDatabase(databaseName);
-            try {
-                db.beginTransaction();
-                //delete the old file
-                cursor = db.rawQuery("Select pFileName from EasyStorer where Tag = ? and ClassName = ?",new String[]{tag,obj.getClass().getName()});
-                if(cursor.getCount()>0){
-                    pFiles = new File[cursor.getCount()];
-                    int i = 0;
-                    while(cursor.moveToNext()){
-                        pFiles[i++] = new File(String.format("%s/%s/%s.es",OBJECT_SAVE_PATH,databaseName,cursor.getLong(0)));
-                    }
-                }
-                cursor.close();
-                //search a new index for this object
-                db.execSQL("Delete from EasyStorer where  Tag = ? and ClassName = ?",new String[]{tag,obj.getClass().getName()});
-                cursor = db.rawQuery("Select ID from EasyIndex;",null);
-                if(cursor.moveToNext()){
-                    index = 1L + cursor.getLong(0);
-                }
-                //prepare the file to save object
-                wFile = new File(String.format("%s/%s/%s.es",OBJECT_SAVE_PATH,databaseName,index));
-                if(!wFile.getParentFile().exists()){
-                    wFile.getParentFile().mkdirs();
-                }
-                if(!wFile.exists()){
-                    wFile.createNewFile();
-                }
-                //write object data to file
-                fos =  new FileOutputStream(wFile);
-                oos =new ObjectOutputStream(fos);
-                oos.writeObject(obj);
-                //also execute the SQLite command to update record info
-                db.execSQL("Delete from EasyIndex;");
-                db.execSQL("Insert into EasyIndex(ID) values(?);",new Object[]{index});
-                db.execSQL("Insert into EasyStorer(Tag,ClassName,pFileName) values(?,?,?);",new Object[]{tag,obj.getClass().getName(),String.valueOf(index)});
-            } catch (Exception e) {
-                flag = false;
-            } finally {
-                try { cursor.close(); } catch (Exception e) { }
-                try { oos.close(); } catch (Exception e) { }
-                try { fos.close(); } catch (Exception e) { }
-                if(flag) {
-                    if(pFiles!=null){
-                        for(File f:pFiles){
-                            try { f.delete(); } catch (Exception e) { }
-                        }
-                    }
-                    db.setTransactionSuccessful();
-                }
-                else{
-                    try { wFile.delete(); } catch (Exception e) { }
-                }
-                db.endTransaction();
+        lock.lock();
+        try {
+            wFile = new File(String.format("%s/%s/%s/%s.es",OBJECT_SAVE_PATH,group,obj.getClass().getName().replaceAll("\\.", "/"),tag));
+            if(!wFile.getParentFile().exists()){
+                wFile.getParentFile().mkdirs();
             }
+            if(!wFile.exists()){
+                wFile.createNewFile();
+            }
+            fos =  new FileOutputStream(wFile);
+            oos =new ObjectOutputStream(fos);
+            oos.writeObject(obj);
+        } catch (Exception e) {
+            flag = false;
+        } finally {
+            try { oos.close(); } catch (Exception e) { }
+            try { fos.close(); } catch (Exception e) { }
+            try { if(!flag)  wFile.delete(); } catch (Exception e) { }
+            lock.unlock();
         }
+
         return flag;
     }
 
-    private boolean removeItem(String tag,String databaseName){
-        SQLiteDatabase db = null;
-        Cursor cursor = null;
+    private boolean deleteOne(File f,final String group) {
         boolean flag = true;
-        synchronized (locker){
-            db = getDatabase(databaseName);
-            db.beginTransaction();
-            try {
-                cursor = db.rawQuery("Select pFileName,ClassName from EasyStorer where Tag = ?",new String[]{tag});
-                while(cursor.moveToNext()){
-                    db.execSQL("Delete from EasyStorer where Tag = ? and ClassName = ? and pFileName = ?",new String[]{tag,cursor.getString(1),cursor.getString(0)});
-                    try { new File(String.format("%s/%s/%s.es",OBJECT_SAVE_PATH,databaseName,cursor.getLong(0))).delete(); } catch (Exception e) { }
-                }
-            } catch (Exception e) {
-                flag = false;
-            } finally {
-                if(flag){
-                    db.setTransactionSuccessful();
-                }
-                try { cursor.close(); } catch (Exception e) { }
-                db.endTransaction();
-            }
-            System.gc();
-        }
+        String fileName = f.getAbsolutePath();
+        String tag = new StringBuilder(f.getName().substring(0,f.getName().length()-".es".length())).toString();
+        File fCls = new File(OBJECT_SAVE_PATH+"/");
+        String className = new String(fileName.substring(fCls.getAbsolutePath().length()));
+        className = new String(className.substring(0,className.length() - f.getName().length()));
+
+        final ReentrantReadWriteLock.WriteLock lock = getLock(group,className,tag).writeLock();
+        lock.lock();
+        try { f.delete(); } catch (Exception e) { flag = false; }
+        lock.unlock();
+        removeLock(group,className,tag);
         return flag;
     }
 
-    private boolean removeItem(String tag,Class clazz,String databaseName){
-        SQLiteDatabase db = null;
-        Cursor cursor = null;
+    private boolean deleteGroup(File f,final String group){
         boolean flag = true;
-        synchronized (locker){
-            db = getDatabase(databaseName);
-            db.beginTransaction();
-            try {
-                cursor = db.rawQuery("Select pFileName,ClassName from EasyStorer where Tag = ?",new String[]{tag,clazz.getName()});
-                while(cursor.moveToNext()){
-                    db.execSQL("Delete from EasyStorer where Tag = ? and ClassName = ? and pFileName = ?",new String[]{tag,cursor.getString(1),cursor.getString(0)});
-                    try { new File(String.format("%s/%s/%s.es",OBJECT_SAVE_PATH,databaseName,cursor.getLong(0))).delete(); } catch (Exception e) { }
+
+        if(f!=null&&f.exists()){
+            File fs[] = f.listFiles();
+            if(fs!=null){
+                for(File _f:fs) {
+                    flag &= deleteGroup(_f,group);
                 }
-            } catch (Exception e) {
-                flag = false;
-            } finally {
-                if(flag){
-                    db.setTransactionSuccessful();
-                }
-                try { cursor.close(); } catch (Exception e) { }
-                db.endTransaction();
+                f.delete();
             }
-            System.gc();
+            else {
+                flag &= deleteOne(f,group);
+            }
         }
+
         return flag;
     }
 
-    private boolean clearAll(String databaseName){
-        SQLiteDatabase db = null;
+    private boolean deleteTag(File f,String group,String tag){
         boolean flag = true;
-        synchronized (locker){
-            try {
-                db = getDatabase(databaseName);
-                db.beginTransaction();
-                File file = new File(String.format("%s/%s/",OBJECT_SAVE_PATH,databaseName));
-                if(file.exists()&&file.isDirectory()){
-                    File files[] = file.listFiles();
-                    for(File f:files){
-                        try { f.delete(); } catch (Exception e) { }
-                    }
+
+        if(f!=null&&f.exists()){
+            File fs[] = f.listFiles();
+            if(fs!=null){
+                for(File _f:fs) {
+                    flag &= deleteTag(_f,group,tag);
                 }
-                db.execSQL("Delete from EasyStorer;");
-                db.execSQL("Delete from EasyIndex;");
-                db.execSQL("Insert into EasyIndex(ID) values(0);");
-            } catch (Exception e) {
-                flag = false;
+                f.delete();
             }
-            finally {
-                if(flag){
-                    db.setTransactionSuccessful();
-                    db.endTransaction();
-                    String path = context.getDatabasePath(databaseName).getParent();
-                    try { new File(path+"/"+databaseName+"/").delete(); } catch (Exception e) { }
-                    try { new File(path+"/"+databaseName+".db").delete(); } catch (Exception e) { }
-                    try { new File(path+"/"+databaseName+".db-journal").delete(); } catch (Exception e) { }
-                    dbProvider.remove(databaseName);
-                }
-                else {
-                    db.endTransaction();
-                }
-                System.gc();
+            else if(f.getName().equals(tag+".es")){
+                flag &= deleteOne(f,group);
             }
         }
+
         return flag;
+    }
+
+    private boolean removeItem(String tag,String group){
+        return deleteTag(new File(String.format("%s/%s/",OBJECT_SAVE_PATH,group)),group,tag);
+    }
+
+    private boolean removeItem(String tag,Class clazz,String group){
+        final ReentrantReadWriteLock.WriteLock lock = getLock(group,clazz.getClass().getName(),tag).writeLock();
+        boolean flag = false;
+
+        lock.lock();
+        try {
+            File f = new File(String.format("%s/%s/%s/%s.es",
+                    OBJECT_SAVE_PATH,
+                    group,
+                    clazz.getClass().getName().replaceAll("\\.", "/"),tag));
+            flag = f.exists()?f.delete():true;
+        } catch (Exception e) {}
+        lock.unlock();
+        removeLock(group,clazz.getName().replaceAll("\\.", "/"),tag);
+        return flag;
+    }
+
+    private boolean clearAll(String group){
+        return deleteGroup(new File(String.format("%s/%s/", OBJECT_SAVE_PATH, group)),group);
     }
     //endregion
 
     //region 检测初始化及是否实现Serializable接口
-    private static final Set<String> classSet = new HashSet<>();
-    private static void CheckSerializable(final Class clazz){
+    private static void CheckSerializable(final Class clazz,Set<String> classSet){
         if(classSet.contains(clazz.getName())||clazz.isInterface()) return;
         classSet.add(clazz.getName());
         Log.e("CheckSerializable",clazz.getName());
@@ -277,44 +318,39 @@ public class EasyStorer {
         Set<Field> fields = new HashSet<>(new ArrayList(Arrays.asList(clazz.getFields())){{addAll(new ArrayList(Arrays.asList(clazz.getDeclaredFields())));}});
         for(Field field:fields){
             if(field.getDeclaringClass().isInterface()){
-                CheckSerializable(field.getDeclaringClass());
+                CheckSerializable(field.getDeclaringClass(),classSet);
                 continue;
             }
-            if(new HashSet(new ArrayList(Arrays.asList(new String[]{
-                    "int",
-                    "short",
-                    "long",
-                    "double",
-                    "char",
-                    "byte",
-                    "float",
-                    "boolean",
-                    "java.lang.Integer",
-                    "java.lang.Short",
-                    "java.lang.Long",
-                    "java.lang.Double",
-                    "java.lang.Character",
-                    "java.lang.Byte",
-                    "java.lang.Float",
-                    "java.lang.Boolean",
-                    "java.lang.Object"
-            }))).contains(field.getType().getName())||field.getType().getName().startsWith("java.")){
+            if(classSet.contains(field.getType().getName())||field.getType().getName().startsWith("java.")){
                 continue;
             }
             if(!Serializable.class.isAssignableFrom(field.getType())){
                 throw new RuntimeException(String.format("Class %s must implement Serializable!",field.getType().getName()));
             }
-            CheckSerializable(field.getType());
+            CheckSerializable(field.getType(),classSet);
         }
     }
 
     private static void TraceCheck(Object obj){
-        if(context == null){
-            throw new RuntimeException("You can't use EasyStorer without initializing it!\nYou should call init(Context) first in Application!");
-        }
-        CheckSerializable(obj.getClass());
-        classSet.clear();
-        System.gc();
+        CheckSerializable(obj.getClass(),new HashSet(new ArrayList(Arrays.asList(new String[]{
+                "int",
+                "short",
+                "long",
+                "double",
+                "char",
+                "byte",
+                "float",
+                "boolean",
+                "java.lang.Integer",
+                "java.lang.Short",
+                "java.lang.Long",
+                "java.lang.Double",
+                "java.lang.Character",
+                "java.lang.Byte",
+                "java.lang.Float",
+                "java.lang.Boolean",
+                "java.lang.Object"
+        }))));
     }
     //endregion
 
@@ -322,7 +358,7 @@ public class EasyStorer {
     //region 静态公有函数
     private static Context context = null;
     public static void init(Context context){EasyStorer.context = context;}
-
+    public static void init(String savePath){ OBJECT_SAVE_PATH = savePath; }
     /**
      *
      * @param tag 标签
@@ -338,13 +374,13 @@ public class EasyStorer {
      *
      * @param tag
      * @param defaultValue
-     * @param databaseName
+     * @param group
      * @param <T>
      * @return
      */
-    public static <T> T get(String tag,T defaultValue,String databaseName){
+    public static <T> T get(String tag,T defaultValue,String group){
         TraceCheck(defaultValue);
-        Object returnObject = getInstance().readObject(tag,defaultValue,databaseName==null?"_Easy_Storer_":databaseName);
+        Object returnObject = getInstance().readObject(tag,defaultValue,group==null?"_Easy_Storer_":group);
         return (T)(returnObject == null?defaultValue:returnObject);
     }
 
@@ -362,12 +398,12 @@ public class EasyStorer {
      *
      * @param tag
      * @param obj
-     * @param databaseName
+     * @param group
      * @return
      */
-    public static boolean put(String tag,Object obj,String databaseName){
+    public static boolean put(String tag,Object obj,String group){
         TraceCheck(obj);
-        return getInstance().writeObject(tag,obj,databaseName==null?"_Easy_Storer_":databaseName);
+        return getInstance().writeObject(tag,obj,group==null?"_Easy_Storer_":group);
     }
 
     /**
@@ -382,11 +418,11 @@ public class EasyStorer {
     /**
      *
      * @param tag 标签
-     * @param databaseName
+     * @param group
      * @return
      */
-    public static boolean remove(String tag,String databaseName){
-        return getInstance().removeItem(tag,(databaseName==null||"".equals(databaseName))?"_Easy_Storer_":databaseName);
+    public static boolean remove(String tag,String group){
+        return getInstance().removeItem(tag,(group==null||"".equals(group))?"_Easy_Storer_":group);
     }
 
     /**
@@ -403,19 +439,19 @@ public class EasyStorer {
      *
      * @param tag
      * @param clazz
-     * @param databaseName
+     * @param group
      * @return
      */
-    public static boolean remove(String tag,Class clazz, String databaseName){
-        return getInstance().removeItem(tag,clazz,databaseName==null?"_Easy_Storer_":databaseName);
+    public static boolean remove(String tag,Class clazz, String group){
+        return getInstance().removeItem(tag,clazz,group==null?"_Easy_Storer_":group);
     }
 
     public static boolean clear(){
         return clear(null);
     }
 
-    public static boolean clear(String databaseName){
-        return getInstance().clearAll(databaseName==null?"_Easy_Storer_":databaseName);
+    public static boolean clear(String group){
+        return getInstance().clearAll(group==null?"_Easy_Storer_":group);
     }
     //endregion
 }
