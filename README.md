@@ -14,7 +14,7 @@ EasyStorer静态公有函数，怎么样，看了这个类结构，大概不用�
 dependencies {
 	...
 	//https://github.com/isong0623/EasyStorer.git
-	api "com.github.isong0623:EasyStorer:2.0-core"
+	api "com.github.isong0623:EasyStorer:2.1-core"
 	...
 }
 ```
