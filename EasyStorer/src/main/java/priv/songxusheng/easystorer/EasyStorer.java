@@ -181,6 +181,10 @@ public class EasyStorer {
         final ReentrantReadWriteLock.ReadLock lock = getLock(readGroup,defaultValue.getClass().getName(),tag).readLock();
 
         lock.lock();
+        if(!getLock(readGroup,defaultValue.getClass().getName(),tag).readLock().equals(lock)){
+            lock.unlock();
+            return readObject(tag,defaultValue,readGroup);
+        }
         try {
             fis = new FileInputStream(String.format("%s/%s/%s/%s.es",OBJECT_SAVE_PATH,readGroup,defaultValue.getClass().getName().replaceAll("\\.", "/"),tag));
             ois = new ObjectInputStream(fis);
@@ -204,6 +208,10 @@ public class EasyStorer {
         boolean flag = true;
 
         lock.lock();
+        if(!getLock(group,obj.getClass().getName(),tag).writeLock().equals(lock)){
+            lock.unlock();
+            return writeObject(tag,obj,group);
+        }
         try {
             wFile = new File(String.format("%s/%s/%s/%s.es",OBJECT_SAVE_PATH,group,obj.getClass().getName().replaceAll("\\.", "/"),tag));
             if(!wFile.getParentFile().exists()){
@@ -233,10 +241,14 @@ public class EasyStorer {
         String tag = new StringBuilder(f.getName().substring(0,f.getName().length()-".es".length())).toString();
         File fCls = new File(OBJECT_SAVE_PATH+"/");
         String className = new String(fileName.substring(fCls.getAbsolutePath().length()));
-        className = new String(className.substring(0,className.length() - f.getName().length()));
+        className = new String(className.substring(group.length()+2,className.length() - f.getName().length()-1)).replaceAll("\\/",".");
 
         final ReentrantReadWriteLock.WriteLock lock = getLock(group,className,tag).writeLock();
         lock.lock();
+        if(!getLock(group,className,tag).writeLock().equals(lock)){
+            lock.unlock();
+            return deleteOne(f,group);
+        }
         try { f.delete(); } catch (Exception e) { flag = false; }
         lock.unlock();
         removeLock(group,className,tag);
@@ -286,15 +298,19 @@ public class EasyStorer {
     }
 
     private boolean removeItem(String tag,Class clazz,String group){
-        final ReentrantReadWriteLock.WriteLock lock = getLock(group,clazz.getClass().getName(),tag).writeLock();
+        final ReentrantReadWriteLock.WriteLock lock = getLock(group,clazz.getName(),tag).writeLock();
         boolean flag = false;
 
         lock.lock();
+        if(!getLock(group,clazz.getName(),tag).writeLock().equals(lock)){
+            lock.unlock();
+            return removeItem(tag,clazz,group);
+        }
         try {
             File f = new File(String.format("%s/%s/%s/%s.es",
                     OBJECT_SAVE_PATH,
                     group,
-                    clazz.getClass().getName().replaceAll("\\.", "/"),tag));
+                    clazz.getName().replaceAll("\\.", "/"),tag));
             flag = f.exists()?f.delete():true;
         } catch (Exception e) {}
         lock.unlock();
